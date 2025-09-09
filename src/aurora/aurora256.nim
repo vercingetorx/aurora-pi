@@ -1,4 +1,4 @@
-# NOTE: Nim 2.0 might needs imports like os and strutils because of changes to standard library
+# NOTE: Nim 2.0 might need std imports because of changes to standard library
 
 # ========================================
 # File: src/aurora/aurora256.nim
