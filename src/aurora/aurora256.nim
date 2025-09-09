@@ -24,9 +24,9 @@ when piProfile == "balanced":
   const PI_STEPS    = 48
 elif piProfile == "test":
   const AURX_ROUNDS = 16
-  const AURX_WARMUP = 8
+  const AURX_WARMUP =  8
   const PI_STEPS    = 32
-else: # max(default)
+else: # max (default)
   const AURX_ROUNDS = 28
   const AURX_WARMUP = 12
   const PI_STEPS    = 64 # micro-ops count (heuristic)
@@ -84,14 +84,14 @@ proc splitmix64(state: var uint64): uint64 {.inline.} =
   z = (z xor (z shr 30)) * 0xbf58476d1ce4e5b9'u64
   z = (z xor (z shr 27)) * 0x94d049bb133111eb'u64
   z = z xor (z shr 31)
-  z
+  return z
 
 proc fnv64(data: string): uint64 =
   var h: uint64 = 1469598103934665603'u64
   for ch in data:
     h = h xor uint64(ord(ch))
     h = h * 1099511628211'u64
-  h
+  return h
 
 proc initRCsOnce() =
   if rcInitDone: return
@@ -199,7 +199,7 @@ proc next64(pr: var PRF): uint64 {.inline.} =
   if pr.idx >= 2: pr.refill()
   let w = pr.outbuf[pr.idx]
   pr.idx += 1
-  w
+  return w
 
 # ------- Byte permutation (invertible) -------
 
@@ -219,7 +219,7 @@ proc permInverse(p: array[32, byte]): array[32, byte] =
   var inv: array[32, byte]
   for i in 0..31:
     inv[p[i]] = byte(i)
-  inv
+  return inv
 
 proc applyPerm(s: State256, p: array[32, byte]): State256 =
   var inb = s.asBytes
@@ -408,7 +408,7 @@ proc encryptBlock*(ks: KeySchedule, buf: openArray[byte]): array[PI_BLOCK_BYTES,
   for i in 0..3: st[i] = st[i] xor ks.wOut[i]
   var outb: array[PI_BLOCK_BYTES, byte]
   storeState(outb, st)
-  outb
+  return outb
 
 # Decrypt a single 256-bit block (same tweak used at expandKey)
 proc decryptBlock*(ks: KeySchedule, buf: openArray[byte]): array[PI_BLOCK_BYTES, byte] =
@@ -419,4 +419,4 @@ proc decryptBlock*(ks: KeySchedule, buf: openArray[byte]): array[PI_BLOCK_BYTES,
   for i in 0..3: st[i] = st[i] xor ks.wIn[i]
   var outb: array[PI_BLOCK_BYTES, byte]
   storeState(outb, st)
-  outb
+  return outb
