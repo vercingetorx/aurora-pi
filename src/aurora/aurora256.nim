@@ -14,7 +14,26 @@ const
   PI_BLOCK_BYTES* = AURORA_BLOCK_BYTES # 32
   PI_KEY_BYTES*   = AURORA_KEY_BYTES   # 32
   PI_TWEAK_BYTES* = AURORA_TWEAK_BYTES # 16
-  PI_STEPS        = 64                 # micro-ops count (heuristic)
+
+# Compile-time profile (override with: -d:piProfile=balanced or test)
+const piProfile {.strdefine.}: string = "max"
+
+when piProfile == "balanced":
+  const AURX_ROUNDS = 20
+  const AURX_WARMUP = 10
+  const PI_STEPS    = 48
+elif piProfile == "test":
+  const AURX_ROUNDS = 16
+  const AURX_WARMUP = 8
+  const PI_STEPS    = 32
+else:
+  const AURX_ROUNDS = 28
+  const AURX_WARMUP = 12
+  const PI_STEPS    = 64 # micro-ops count (heuristic)              
+
+echo AURX_ROUNDS
+echo AURX_WARMUP
+echo PI_STEPS
 
 # ------- basic helpers -------
 
@@ -47,7 +66,7 @@ type PRF* = object
   ctr: uint64
   outbuf: array[2, uint64]  # squeeze 2 words (capacity bump)
   idx: int                 # 0..2
-  mulSched: array[28, uint64]  # per-round odd multipliers (key/tweak-derived)
+  mulSched: array[AURX_ROUNDS, uint64]  # per-round odd multipliers (key/tweak-derived)
 
 var RC_Ag: array[12, uint64]
 var RC_Mg: array[12, uint64]
@@ -82,7 +101,7 @@ proc initRCsOnce() =
   if rcInitDone: return
   var sa = fnv64("AURORA-PI-RC_A-v1")
   var sm = fnv64("AURORA-PI-RC_M-v1")
-  for i in 0..11:
+  for i in 0..<AURX_WARMUP:
     RC_Ag[i] = splitmix64(sa)
     RC_Mg[i] = splitmix64(sm) or 1'u64  # force odd multipliers
   rcInitDone = true
@@ -92,11 +111,11 @@ proc aurxPerm(pr: var PRF) {.inline.} =
   const R0a = [13, 17, 43, 29]
   const R0b = [11, 19, 37, 31]
   const R1  = [31, 27, 46, 33]
-  for r in 0..27:
+  for r in 0..<AURX_ROUNDS:
     let m0 = pr.mulSched[r]
-    let m1 = pr.mulSched[(r+7) mod 28]
-    let m2 = pr.mulSched[(r+13) mod 28]
-    let m3 = pr.mulSched[(r+19) mod 28]
+    let m1 = pr.mulSched[(r+7 ) mod AURX_ROUNDS]
+    let m2 = pr.mulSched[(r+13) mod AURX_ROUNDS]
+    let m3 = pr.mulSched[(r+19) mod AURX_ROUNDS]
 
     if (r and 1) == 0:
       mix( s[0], s[1], R0a[0], m0, RC_Ag[(r)    mod 12])
@@ -149,12 +168,12 @@ proc initPRF(key: openArray[byte], tweak: openArray[byte]): PRF =
 
   # --- NEW: derive per-round odd multipliers from (key,tweak) transparently ---
   var seed = result.s[0] xor result.s[2] xor (result.s[1] shl 1) xor (result.s[3] shr 1) xor 0x414152'u64
-  for r in 0..27:
+  for r in 0..<AURX_ROUNDS:
     var x = splitmix64(seed)      # documented stream generator
     result.mulSched[r] = (x or 1'u64)  # force odd (invertible mod 2^64)
 
   # Warm-up permutations using the new mul schedule
-  for _ in 0..11:
+  for _ in 0..< AURX_WARMUP:
     aurxPerm(result)
 
   # Ready to squeeze
