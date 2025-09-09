@@ -114,7 +114,6 @@ pt = store(S)
   2. Expand with **splitmix64**, 12 values each.
   3. Force multipliers **odd**: `RC_Mg[i] |= 1`.
 * Per‑round odd multipliers `mulSched[28]` are derived from (K,T) via splitmix64 and forced odd.
-* (Legacy fixed tables may appear in reference code but are **superseded** by the transparent generation above.)
 
 ---
 
