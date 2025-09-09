@@ -67,7 +67,7 @@ Given `(K,T)`:
 
 ---
 
-## 5) Algorithms (unchanged)
+## 5) Algorithms
 
 **Encrypt**
 
