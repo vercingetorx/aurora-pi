@@ -16,7 +16,7 @@
 
 ---
 
-## 2) Interfaces (API unchanged)
+## 2) Interfaces
 
 ```
 BlockSize  = 256 bits (32 bytes)
