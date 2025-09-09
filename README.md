@@ -137,16 +137,7 @@ pt = store(S)
 
 ---
 
-## Appendix A — KAT guidance
-
-1. Publish (K, T, PT → CT) vectors.
-2. Include the **first 8 synthesized instructions** (audit only; not required for decryption).
-3. Publish a **PRF profile hash**, e.g. SHA‑256 over: `AlgID || constant seeds || rotation sets || quota policy || domain schedule`.
-4. Provide KATs for all profiles (max/balanced/test) to prevent parameter drift.
-
----
-
-## Appendix B — Delta 0.11 → 0.12 (for reviewers)
+## Appendix A — Delta 0.11 → 0.12 (for reviewers)
 
 * Steps 48→**64** (default max).
 * PRF upgraded to **AURX512** with **28** permutation rounds, **dual mix flavors**, lane‑wide constant coverage.
