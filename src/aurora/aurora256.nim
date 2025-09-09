@@ -29,11 +29,7 @@ elif piProfile == "test":
 else:
   const AURX_ROUNDS = 28
   const AURX_WARMUP = 12
-  const PI_STEPS    = 64 # micro-ops count (heuristic)              
-
-echo AURX_ROUNDS
-echo AURX_WARMUP
-echo PI_STEPS
+  const PI_STEPS    = 64 # micro-ops count (heuristic)
 
 # ------- basic helpers -------
 
