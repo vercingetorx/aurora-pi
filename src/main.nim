@@ -24,7 +24,7 @@ import aurora/modes
 import aurora/fileops
 
 proc demo() =
-  echo "AURORA-Λ demo\n----------------"
+  echo "AURORA-Π demo\n----------------"
   let keyHex = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
   let tweakHex = "000102030405060708090a0b0c0d0e0f"
   var key = parseHex(keyHex)
@@ -45,7 +45,7 @@ proc demo() =
   # CTR demo
   var nonce = parseHex("00000000000000000000000000000000")
   var cs = initCtr(ks, nonce)
-  let s = "Hello, world! — AURORA-Λ"
+  let s = "Hello, world! — AURORA-Π"
   var msg = newSeq[byte](s.len)
   for i in 0..<s.len: msg[i] = byte(s[i])
   cs.ctrXor(msg)
