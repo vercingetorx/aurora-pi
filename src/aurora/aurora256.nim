@@ -249,16 +249,6 @@ proc invOdd64(c: uint64): uint64 =
     x = x * (2'u64 - c * x)
   return x
 
-proc gfShiftL(x: uint64, k: int): uint64 =
-  # multiply by x^k in GF(2^64) with poly x^64 + x^4 + x^3 + x + 1 (0x1B)
-  var v = x
-  for _ in 1..k:
-    let carry = (v shr 63) and 1'u64
-    v = v shl 1
-    if carry == 1'u64:
-      v = v xor 0x1B'u64
-  v
-
 proc doPerm(x: var State256, p: array[32, byte]) {.inline.} =
   x = applyPerm(x, p)
 
