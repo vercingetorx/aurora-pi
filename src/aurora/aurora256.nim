@@ -26,7 +26,7 @@ elif piProfile == "test":
   const AURX_ROUNDS = 16
   const AURX_WARMUP = 8
   const PI_STEPS    = 32
-else:
+else: # max(default)
   const AURX_ROUNDS = 28
   const AURX_WARMUP = 12
   const PI_STEPS    = 64 # micro-ops count (heuristic)
@@ -169,7 +169,7 @@ proc initPRF(key: openArray[byte], tweak: openArray[byte]): PRF =
     result.mulSched[r] = (x or 1'u64)  # force odd (invertible mod 2^64)
 
   # Warm-up permutations using the new mul schedule
-  for _ in 0..< AURX_WARMUP:
+  for _ in 0..<AURX_WARMUP:
     aurxPerm(result)
 
   # Ready to squeeze
