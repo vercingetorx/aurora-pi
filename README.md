@@ -123,7 +123,7 @@ pt = store(S)
 * **Balanced profile:** `Steps=48`, `PermRounds=20`, `Warmup=10`, quotas on, mid‑absorb on, capacity=2 words.
 * **Test profile (not for prod):** `Steps≥32`, `PermRounds≥16`.
 
-*Build‑time flag suggestion:* `-d:piProfile=max|balanced|test`.
+*Build‑time flags:* `-d:piProfile=max|balanced|test`.
 
 ---
 
