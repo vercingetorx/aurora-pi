@@ -136,7 +136,7 @@ pt = store(S)
 
 ---
 
-## Appendix A — Delta 0.11 → 0.12 (for reviewers)
+## Appendix A — Delta 0.11 → 0.12
 
 * Steps 48→**64** (default max).
 * PRF upgraded to **AURX512** with **28** permutation rounds, **dual mix flavors**, lane‑wide constant coverage.
