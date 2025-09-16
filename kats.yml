@@ -1,0 +1,30 @@
+name: KATs
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  kats:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        profile: [max, balanced, test]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Nim 2.2.4
+        uses: jiro4989/setup-nim-action@v1
+        with:
+          nim-version: '2.2.4'
+
+      - name: Build KAT tool (${{ matrix.profile }})
+        run: nim c --path:src -d:release -d:piProfile=${{ matrix.profile }} tools/kat.nim
+
+      - name: Run KAT tool
+        run: ./tools/kat > out.txt
+
+      - name: Compare with committed KATs
+        run: diff -u kats/aurora-pi-kat-${{ matrix.profile }}.txt out.txt
+
