@@ -1,5 +1,5 @@
 # ========================================
-# File: src/aurora/api.nim
+# File: depot.nim
 # Public, user-friendly API for Aurora-Π
 # ========================================
 when isMainModule: discard
