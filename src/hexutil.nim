@@ -1,5 +1,5 @@
 # ========================================
-# File: src/aurora/hexutil.nim
+# File: src/hexutil.nim
 # ========================================
 when isMainModule: discard
 
