@@ -192,7 +192,7 @@ let pt3 = cipher.sivOpen(@[], siv, ct3)
 
 Notes:
 - Keys are 32 bytes; tweak is optional 16 bytes. API throws `AuroraError` with helpful messages on invalid inputs.
-- CTR requires a unique 16-byte nonce for each message under a given key; use `randomNonce16()` on POSIX or your own CSPRNG.
+- CTR requires a unique 16-byte nonce for each message under a given key; use `randomNonce16()` or your own CSPRNG.
 - XEX (tweakable) supports block-aligned data; use AE variants for authenticity.
 - AEAD modes:
   - `xexSeal/xexOpen`: π-XEX-AE (keyed-delta XEX with integrated tag). Block-aligned, parallelizable, authenticates AD+tweak+ciphertext.
