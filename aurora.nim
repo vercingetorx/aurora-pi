@@ -4,7 +4,7 @@
 # ========================================
 when isMainModule: discard
 
-import std/[strformat]
+import std/[strformat, sysrand]
 import src/aead
 import src/aurora256
 import src/common
@@ -118,16 +118,9 @@ proc xexDecrypt*(c: AuroraPiCipher, sectorTweak: openArray[byte], ciphertext: op
 # ---------------- Utilities ----------------
 
 proc randomNonce16*(): array[16, byte] =
-  ## Best-effort 16-byte nonce from /dev/urandom (POSIX). Raises on failure.
-  var f: File
-  if not f.open("/dev/urandom", fmRead):
-    raise newException(AuroraError, "/dev/urandom not available; please supply a random 16-byte nonce")
-  defer: f.close()
-  var buf: array[16, byte]
-  let n = f.readBuffer(addr buf[0], 16)
-  if n != 16:
-    raise newException(AuroraError, "Failed to read 16 random bytes from /dev/urandom")
-  result = buf
+  ## system random bytes
+  if not urandom(result):
+    raise newException(OSError, "Could not obtain secure random bytes")
 
 # ---------------- Authenticated APIs ----------------
 
