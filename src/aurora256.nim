@@ -36,14 +36,14 @@ else: # max (default)
 type State256 = array[4, uint64] # little-endian lanes
 
 proc loadState(b: openArray[byte]): State256 =
-  result[0] = load64(b, 0)
-  result[1] = load64(b, 8)
+  result[0] = load64(b,  0)
+  result[1] = load64(b,  8)
   result[2] = load64(b, 16)
   result[3] = load64(b, 24)
 
 proc storeState(b: var openArray[byte], s: State256) =
-  store64(b, 0, s[0])
-  store64(b, 8, s[1])
+  store64(b,  0, s[0])
+  store64(b,  8, s[1])
   store64(b, 16, s[2])
   store64(b, 24, s[3])
 
@@ -55,12 +55,21 @@ proc asBytes(s: State256): array[32, byte] =
 proc fromBytes(b: openArray[byte]): State256 =
   loadState(b)
 
+proc toHex64(x: uint64): string =
+  var s = newString(16)
+  var t = x
+  for i in countdown(15, 0):
+    let nib = int(t and 0xFu64)
+    s[i] = char((if nib < 10: ord('0') + nib else: ord('a') + (nib-10)))
+    t = t shr 4
+  result = s
+
 # ------- PRF (key/tweak to stream) — AURX512 ARX-MUL permutation -------
 
 type PRF* = object
-  s: array[8, uint64]     # 512-bit state
+  s: array[8, uint64]      # 512-bit state
   ctr: uint64
-  outbuf: array[2, uint64]  # squeeze 2 words (capacity bump)
+  outbuf: array[2, uint64] # squeeze 2 words (capacity bump)
   idx: int                 # 0..2
   mulSched: array[AURX_ROUNDS, uint64]  # per-round odd multipliers (key/tweak-derived)
 
@@ -76,7 +85,7 @@ proc mix(a: var uint64, b: var uint64, r: int, m: uint64, c: uint64) {.inline.} 
 proc mix2(a: var uint64, b: var uint64, r: int, m: uint64, c: uint64) {.inline.} =
   a = a xor (b + c)
   b = rotl(b, r) xor a
-  a = a * m# odd multiplier => invertible mod 2^64
+  a = a * m # odd multiplier => invertible mod 2^64
 
 proc splitmix64(state: var uint64): uint64 {.inline.} =
   state = state + 0x9e3779b97f4a7c15'u64
@@ -97,7 +106,8 @@ proc initRCsOnce() =
   if rcInitDone: return
   var sa = fnv64("AURORA-PI-RC_A-v1")
   var sm = fnv64("AURORA-PI-RC_M-v1")
-  for i in 0..<AURX_WARMUP:
+  # Always populate full families of 12 constants regardless of warmup/profile
+  for i in 0..<12:
     RC_Ag[i] = splitmix64(sa)
     RC_Mg[i] = splitmix64(sm) or 1'u64  # force odd multipliers
   rcInitDone = true
@@ -221,11 +231,25 @@ proc permInverse(p: array[32, byte]): array[32, byte] =
     inv[p[i]] = byte(i)
   return inv
 
+proc eqMask8(a, b: uint8): uint8 {.inline.} =
+  ## Branchless equality mask: 0xFF when a == b else 0x00
+  let x = uint32(a xor b)
+  let m = (x - 1) shr 31        # 1 if x==0 else 0
+  let mask32 = 0'u32 - m        # 0xFFFFFFFF if equal else 0x0
+  result = uint8(mask32 and 0xFF'u32)
+
 proc applyPerm(s: State256, p: array[32, byte]): State256 =
+  ## Constant-time permutation application without secret-dependent indexing
   var inb = s.asBytes
   var outb: array[32, byte]
-  for i in 0..31:
-    outb[i] = inb[int(p[i])]
+  for j in 0..31: outb[j] = 0'u8
+  for k in 0..31:
+    let v = inb[k]
+    let vk = uint32(v)
+    for j in 0..31:
+      let m = uint32(eqMask8(p[j], uint8(k)))
+      let contrib = (vk and m) and 0xFF'u32
+      outb[j] = byte(uint32(outb[j]) or contrib)
   return fromBytes(outb)
 
 # ------- Instruction set -------
@@ -236,10 +260,10 @@ type
 
   Instr = object
     op: OpKind
-    lane: int8          # 0..3 or -1 for non-lane ops
-    rot: uint8          # for ROTL or GFSHIFT (1..63)
-    r2, r3, r4: uint8   # for CROSS
-    imm: uint64         # for XOR/ADD
+    lane: int8            # 0..3 or -1 for non-lane ops
+    rot: uint8            # for ROTL or GFSHIFT (1..63)
+    r2, r3, r4: uint8     # for CROSS
+    imm: uint64           # for XOR/ADD
     perm: array[32, byte] # for PERM only
 
   KeySchedule* = object
@@ -248,14 +272,41 @@ type
     wIn*: State256
     wOut*: State256
 
+proc describeFirstInstrs*(ks: KeySchedule, n: int): string =
+  var desc = ""
+  let m = min(n, ks.enc.len)
+  for i in 0 ..< m:
+    let ins = ks.enc[i]
+    case ins.op
+    of OP_XOR:
+      desc.add("XOR lane="); desc.add($int(ins.lane)); desc.add(" c=0x"); desc.add(toHex64(ins.imm)); desc.add("\n")
+    of OP_ADD:
+      desc.add("ADD lane="); desc.add($int(ins.lane)); desc.add(" c=0x"); desc.add(toHex64(ins.imm)); desc.add("\n")
+    of OP_ROTL:
+      desc.add("ROTL lane="); desc.add($int(ins.lane)); desc.add(" r="); desc.add($int(ins.rot)); desc.add("\n")
+    of OP_MUL:
+      desc.add("MUL lane="); desc.add($int(ins.lane)); desc.add(" c=0x"); desc.add(toHex64(ins.imm)); desc.add("\n")
+    of OP_PERM:
+      desc.add("PERM first8=[")
+      for j in 0..7:
+        if j>0: desc.add(",")
+        desc.add($int(ins.perm[j]))
+      desc.add("]\n")
+    of OP_CROSS:
+      desc.add("CROSS r1="); desc.add($int(ins.rot));
+      desc.add(" r2="); desc.add($int(ins.r2));
+      desc.add(" r3="); desc.add($int(ins.r3));
+      desc.add(" r4="); desc.add($int(ins.r4)); desc.add("\n")
+  result = desc
+
 # ------- Ops -------
 
-proc doXor(x: var State256, lane: int, c: uint64) {.inline.} = x[lane] = x[lane] xor c
-proc doAdd(x: var State256, lane: int, c: uint64) {.inline.} = x[lane] = x[lane] + c
-proc doSub(x: var State256, lane: int, c: uint64) {.inline.} = x[lane] = x[lane] - c
-proc doRotl(x: var State256, lane: int, r: int) {.inline.} = x[lane] = rotl(x[lane], r)
-proc doRotr(x: var State256, lane: int, r: int) {.inline.} = x[lane] = rotr(x[lane], r)
-proc doMul(x: var State256, lane: int, c: uint64) {.inline.} = x[lane] = x[lane] * c
+proc doXor( x: var State256, lane: int, c: uint64) {.inline.} = x[lane] = x[lane] xor c
+proc doAdd( x: var State256, lane: int, c: uint64) {.inline.} = x[lane] = x[lane] + c
+proc doSub( x: var State256, lane: int, c: uint64) {.inline.} = x[lane] = x[lane] - c
+proc doRotl(x: var State256, lane: int, r: int)    {.inline.} = x[lane] = rotl(x[lane], r)
+proc doRotr(x: var State256, lane: int, r: int)    {.inline.} = x[lane] = rotr(x[lane], r)
+proc doMul( x: var State256, lane: int, c: uint64) {.inline.} = x[lane] = x[lane] * c
 
 # multiplicative inverse of odd 64-bit modulo 2^64
 proc invOdd64(c: uint64): uint64 =
@@ -269,8 +320,8 @@ proc doPerm(x: var State256, p: array[32, byte]) {.inline.} =
 
 proc doCross(x: var State256, r1, r2, r3, r4: int) =
   # forward
-  x[0] = x[0] + rotl(x[1], r1)
-  x[2] = x[2] + rotl(x[3], r2)
+  x[0] = x[0] +   rotl(x[1], r1)
+  x[2] = x[2] +   rotl(x[3], r2)
   x[1] = x[1] xor rotl(x[2], r3)
   x[3] = x[3] xor rotl(x[0], r4)
 
@@ -278,8 +329,8 @@ proc doCrossInv(x: var State256, r1, r2, r3, r4: int) =
   # inverse order
   x[3] = x[3] xor rotl(x[0], r4)
   x[1] = x[1] xor rotl(x[2], r3)
-  x[2] = x[2] - rotl(x[3], r2)
-  x[0] = x[0] - rotl(x[1], r1)
+  x[2] = x[2] -   rotl(x[3], r2)
+  x[0] = x[0] -   rotl(x[1], r1)
 
 # ------- Program generation -------
 
@@ -302,41 +353,59 @@ proc expandKey*(key: openArray[byte], tweak: openArray[byte] = @[]): KeySchedule
   pr.absorb(DOM_PROG, 0x03'u64)
 
   # Build enc program
-  var prog: seq[Instr] = @[]
-  var step = 0
-  var winRemaining = 8
-  var havePerm = false
-  var haveCross = false
-  var haveMul = false
+  var prog: seq[Instr]  = @[]
+  var step: int         = 0
+  var winRemaining: int = 8
+  var havePerm: bool    = false
+  var haveCross: bool   = false
+  var haveMul: bool     = false
+  var laneHit: array[4, bool]
 
   while step < PI_STEPS:
     if step == PI_STEPS div 2:
       pr.absorb(DOM_PROG, 0x04'u64)
     var forceKind = -1
+    var forcedLane = -1
     if winRemaining == 1:
-      if not havePerm: forceKind = 5   # PERM
-      elif not haveCross: forceKind = 6 # CROSS
-      elif not haveMul: forceKind = 4  # MUL
+      if not havePerm:
+        forceKind = 5   # PERM
+      elif not haveCross:
+        forceKind = 6   # CROSS
+      elif not haveMul:
+        forceKind = 4   # MUL
+      else:
+        # Enforce per-window lane coverage for lane-local ops
+        for ln in 0..3:
+          if not laneHit[ln]:
+            forceKind = 0   # choose a lane-op (XOR)
+            forcedLane = ln
+            break
 
     let pick = if forceKind >= 0: forceKind else: int(pr.next64() mod 8)
     case pick
     of 0,1: # XOR
-      let ln = int(pr.next64() and 3'u64)
-      let c = pr.next64()
+      let ln = if forcedLane >= 0: forcedLane else: int(pr.next64() and 3'u64)
+      var c = pr.next64()
+      while c == 0'u64: c = pr.next64()          # reject true no-op
       prog.add Instr(op: OP_XOR, lane: int8(ln), imm: c)
+      laneHit[ln] = true
     of 2:   # ADD (odd)
       let ln = int(pr.next64() and 3'u64)
       let c = pr.next64() or 1'u64
       prog.add Instr(op: OP_ADD, lane: int8(ln), imm: c)
+      laneHit[ln] = true
     of 3:   # ROTL
       let ln = int(pr.next64() and 3'u64)
       let r = 1 + int(pr.next64() mod 63'u64)
       prog.add Instr(op: OP_ROTL, lane: int8(ln), rot: uint8(r))
+      laneHit[ln] = true
     of 4:   # MUL (odd)
       let ln = int(pr.next64() and 3'u64)
-      let c = pr.next64() or 1'u64
+      var c = pr.next64() or 1'u64
+      while c == 1'u64: c = pr.next64() or 1'u64  # reject identity multiplier
       prog.add Instr(op: OP_MUL, lane: int8(ln), imm: c)
       haveMul = true
+      laneHit[ln] = true
     of 5:   # PERM
       let permVal = genPerm32(pr)
       prog.add Instr(op: OP_PERM, lane: -1'i8, perm: permVal)
@@ -356,6 +425,7 @@ proc expandKey*(key: openArray[byte], tweak: openArray[byte] = @[]): KeySchedule
       havePerm = false
       haveCross = false
       haveMul = false
+      for i in 0..3: laneHit[i] = false
   result.enc = prog
 
   # Build dec program as inverse in reverse order
