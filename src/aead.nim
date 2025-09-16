@@ -1,5 +1,5 @@
 # ========================================
-# File: src/aurora/aead.nim
+# File: src/aead.nim
 # Authenticated modes for Aurora-Π
 #  - π-XEX-AE: keyed-delta XEX with integrated tag (MP compression)
 #  - π-SIV: deterministic AEAD via PRF-based SIV + CTR
