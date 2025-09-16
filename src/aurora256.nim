@@ -1,7 +1,7 @@
 # NOTE: Nim 2.0 might need std imports because of changes to standard library
 
 # ========================================
-# File: src/aurora/aurora256.nim
+# File: src/aurora256.nim
 # ========================================
 when isMainModule: discard
 
