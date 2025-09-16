@@ -78,3 +78,20 @@ proc nlUnmix*(x: var U128) {.inline.} =
   x.a = x.a xor (rotl(x.b, 31))
   x.b = x.b xor (rotl(x.a, 17))
   x.a = x.a - (rotl(x.b, 23))
+
+proc bytesSeq*(vals: openArray[int]): seq[byte] =
+  result = newSeq[byte](vals.len)
+  for i, v in vals: result[i] = byte(v and 0xff)
+
+proc toBytes*(s: string): seq[byte] =
+  result = newSeq[byte](s.len)
+  for i in 0 ..< s.len: result[i] = byte(s[i])
+
+proc incBytes*(n: int): seq[byte] =
+  result = newSeq[byte](n)
+  for i in 0 ..< n: result[i] = byte(i and 0xff)
+
+proc printKV*(k, v: string) =
+  echo k, ": ", v
+
+proc printLine*() = echo "----------------------------------------"
