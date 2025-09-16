@@ -1,5 +1,5 @@
 # ========================================
-# File: src/aurora/common.nim
+# File: src/common.nim
 # ========================================
 when isMainModule: discard
 
