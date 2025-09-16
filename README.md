@@ -25,7 +25,7 @@ TweakSize  = 128 bits (16 bytes, may be empty)
 Steps      = 64   // max profile default
 ```
 
-Library provides `expandKey`, `encryptBlock`, `decryptBlock`, and stream/XEX/SIV modes.
+Library provides `expandKey`, `encryptBlock`, `decryptBlock`, stream/XEX modes, and AEAD (π-XEX-AE, π-SIV).
 
 ---
 
@@ -136,7 +136,16 @@ pt = store(S)
 
 ---
 
-## Appendix A — Delta 0.11 → 0.12
+## Appendix A — KAT guidance
+
+1. Publish (K, T, PT → CT) vectors.
+2. Include the **first 8 synthesized instructions** (audit only; not required for decryption).
+3. Publish a **PRF profile hash**, e.g. SHA‑256 over: `AlgID || constant seeds || rotation sets || quota policy || domain schedule`.
+4. Provide KATs for all profiles (max/balanced/test) to prevent parameter drift.
+
+---
+
+## Appendix B — Delta 0.11 → 0.12
 
 * Steps 48→**64** (default max).
 * PRF upgraded to **AURX512** with **28** permutation rounds, **dual mix flavors**, lane‑wide constant coverage.
@@ -145,3 +154,85 @@ pt = store(S)
 * **Transparent constant derivation** (FNV‑1a64 + splitmix64).
 * **Capacity bump**: squeeze **2 words** per refill.
 * **Mid‑synthesis re‑absorb** retained; per‑window quotas retained.
+## 2a) Public API (easy to use)
+
+For application developers, use `aurora.nim` which wraps common modes with clear checks and names:
+
+Example (Nim):
+
+```
+import aurora/api
+
+let key = @[byte 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31]
+let tweak = @[byte 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]  # optional
+let cipher = newAuroraPiContext(key, tweak)
+
+# CTR mode (requires unique nonce per key)
+let nonce = randomNonce16()
+var msg = toBytes("Hello, world!")
+let ct = cipher.ctrEncrypt(nonce, msg)
+let pt = cipher.ctrDecrypt(nonce, ct)
+
+# XEX mode (tweakable, length must be multiple of 32)
+let sectorTweak = @[byte 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]
+var sector = newSeq[byte](64) # 2 blocks
+let xct = cipher.xexEncrypt(sectorTweak, sector)
+let xpt = cipher.xexDecrypt(sectorTweak, xct)
+
+# π-XEX-AE (authenticated, block-aligned, tweakable)
+let ad = toBytes("header-metadata")
+let (ct2, tag) = cipher.xexSeal(sectorTweak, ad, sector)
+let pt2 = cipher.xexOpen(sectorTweak, ad, ct2, tag)
+
+# π-SIV (deterministic AEAD, misuse-resistant)
+let msg2 = toBytes("secret")
+let (siv, ct3) = cipher.sivSeal(@[], msg2)
+let pt3 = cipher.sivOpen(@[], siv, ct3)
+```
+
+Notes:
+- Keys are 32 bytes; tweak is optional 16 bytes. API throws `AuroraError` with helpful messages on invalid inputs.
+- CTR requires a unique 16-byte nonce for each message under a given key; use `randomNonce16()` on POSIX or your own CSPRNG.
+- XEX (tweakable) supports block-aligned data; use AE variants for authenticity.
+- AEAD modes:
+  - `xexSeal/xexOpen`: π-XEX-AE (keyed-delta XEX with integrated tag). Block-aligned, parallelizable, authenticates AD+tweak+ciphertext.
+  - `sivSeal/sivOpen`: π-SIV (deterministic AEAD). Misuse-resistant; safe default for general use.
+
+---
+
+## KATs (Known Answer Tests)
+
+Generate and lock deterministic vectors for each build profile.
+
+Build and run
+- Max profile (default):
+  - `mkdir -p kats`
+  - `nim c --path:src -d:release -d:piProfile=max tools/kat.nim && ./tools/kat > kats/aurora-pi-kat-max.txt`
+- Balanced profile:
+  - `nim c --path:src -d:release -d:piProfile=balanced tools/kat.nim && ./tools/kat > kats/aurora-pi-kat-balanced.txt`
+- Test profile:
+  - `nim c --path:src -d:release -d:piProfile=test tools/kat.nim && ./tools/kat > kats/aurora-pi-kat-test.txt`
+
+What’s included in each file
+- PROGRAM_FIRST8: the first eight synthesized instructions (audit-only; not required for decryption).
+- Core block: K, T, PT_BLK, CT_BLK, DT_BLK.
+- CTR: CTR_NONCE, CTR_MSG (ASCII), CTR_CT.
+- XEX (conf-only): XEX_TWEAK, XEX_PT, XEX_CT.
+- π-XEX-AE: XEXAE_AD, XEXAE_CT, XEXAE_TAG (32 bytes).
+- π-SIV: SIV_AD, SIV_IV (16 bytes), SIV_CT.
+
+Determinism & profiles
+- Vectors are deterministic for a given profile (max/balanced/test). Changing `-d:piProfile` changes the synthesized program and outputs.
+- Ensure you compile with `--path:src` so Nim can find modules under `src/`.
+
+Verifying locally
+- Rebuild and diff against committed vectors:
+  - `nim c --path:src -d:release -d:piProfile=max tools/kat.nim && ./tools/kat > out.txt && diff -u kats/aurora-pi-kat-max.txt out.txt`
+
+Regenerating on intentional changes
+- If you change parameters (e.g., PRF rounds, quotas, constants), regenerate all three files and commit them with a note explaining the change.
+- CI enforces this by rebuilding KATs and diffing against files in `kats/` (see `.github/workflows/kats.yml`).
+
+Notes
+- PROGRAM_FIRST8 is provided for auditing and interop debugging.
+- Hex is uppercase; ASCII inputs (like CTR_MSG) are hex-encoded for consistency.
