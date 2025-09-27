@@ -20,10 +20,10 @@ jobs:
           nim-version: '2.2.4'
 
       - name: Build KAT tool (${{ matrix.profile }})
-        run: nim c --path:src -d:release -d:piProfile=${{ matrix.profile }} tools/kat.nim
+        run: nim c --path:src -d:release -d:piProfile=${{ matrix.profile }} kats/kat_gen.nim
 
       - name: Run KAT tool
-        run: ./tools/kat > out.txt
+        run: ./kats/kat_gen > out.txt
 
       - name: Compare with committed KATs
         run: diff -u kats/aurora-pi-kat-${{ matrix.profile }}.txt out.txt
