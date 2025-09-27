@@ -37,7 +37,7 @@ Library provides `expandKey`, `encryptBlock`, `decryptBlock`, stream/XEX modes, 
 
 ---
 
-## 4) Key schedule & code generation (CT variant)
+## 4) Key schedule & code generation
 
 Given (K, T):
 
@@ -94,9 +94,6 @@ pt = store(S)
 - Constant‑time: branchless, mask‑select engine; constant‑time permutation; no secret‑dependent branches or table lookups.
 - Related‑tweak hygiene: domain separation for derivations; tweak affects whitening and topology.
 - PQ: 256‑bit key (~2¹²⁸ with Grover); 256‑bit block avoids small‑data quantum distinguishers.
-
-Heuristic cipher claims; adopt only after public cryptanalysis. KDF/MAC rely on well‑studied primitives (SHAKE256, HMAC‑SHA3‑256).
-
 ---
 
 ## 7) Constants
@@ -148,7 +145,7 @@ For application developers, use `aurora.nim` which wraps common modes with clear
 Example (Nim):
 
 ```
-import aurora/api
+import aurora
 
 let key = @[byte 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31]
 let tweak = @[byte 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]  # optional
@@ -194,11 +191,11 @@ Generate and lock deterministic vectors for each build profile.
 Build and run
 - Max profile (default):
   - `mkdir -p kats`
-  - `nim c --path:src -d:release -d:piProfile=max tools/kat.nim && ./tools/kat > kats/aurora-pi-kat-max.txt`
+  - `nim c --path:src -d:release -d:piProfile=max kats/kat_gen.nim && ./kats/kat_gen > kats/aurora-pi-kat-max.txt`
 - Balanced profile:
-  - `nim c --path:src -d:release -d:piProfile=balanced tools/kat.nim && ./tools/kat > kats/aurora-pi-kat-balanced.txt`
+  - `nim c --path:src -d:release -d:piProfile=balanced kats/kat_gen.nim && ./kats/kat_gen > kats/aurora-pi-kat-balanced.txt`
 - Test profile:
-  - `nim c --path:src -d:release -d:piProfile=test tools/kat.nim && ./tools/kat > kats/aurora-pi-kat-test.txt`
+  - `nim c --path:src -d:release -d:piProfile=test kats/kat_gen.nim && ./kats/kat_gen > kats/aurora-pi-kat-test.txt`
 
 What’s included in each file
 - PROGRAM_FIRST8: the first eight synthesized instructions (audit-only; not required for decryption).
@@ -214,7 +211,7 @@ Determinism & profiles
 
 Verifying locally
 - Rebuild and diff against committed vectors:
-  - `nim c --path:src -d:release -d:piProfile=max tools/kat.nim && ./tools/kat > out.txt && diff -u kats/aurora-pi-kat-max.txt out.txt`
+  - `nim c --path:src -d:release -d:piProfile=max kats/kat_gen.nim && ./kats/kat_gen > out.txt && diff -u kats/aurora-pi-kat-max.txt out.txt`
 
 Regenerating on intentional changes
 - If you change parameters (e.g., PRF rounds, quotas, constants), regenerate all three files and commit them with a note explaining the change.
