@@ -2,9 +2,9 @@
 # File: tools/kat.nim
 # KAT generator for Aurora-Π core and modes
 # Build:
-#   nim c -d:release -d:piProfile=max tools/kat.nim   # or balanced/test
+#   nim c -d:release -d:piProfile=max kats/kat_gen.nim   # or balanced/test
 # Run:
-#   ./tools/kat
+#   ./kats/kat_gen
 # ========================================
 import std/[sequtils, strutils, strformat]
 import ../src/hexutil
