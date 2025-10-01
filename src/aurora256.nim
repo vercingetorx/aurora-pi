@@ -45,10 +45,10 @@ proc storeState(b: var openArray[byte], s: State256) =
 proc asBytes(s: State256): array[32, byte] =
   var output: array[32, byte]
   storeState(output, s)
-  output
+  return output
 
 proc fromBytes(b: openArray[byte]): State256 =
-  loadState(b)
+  return loadState(b)
 
 proc toHex64(x: uint64): string =
   var s = newString(16)
@@ -65,36 +65,36 @@ proc ctMask32Eq(a, b: uint32): uint32 {.inline.} =
   ## 0xFFFFFFFF when a == b else 0x00000000  (correct, no false positives)
   let x = a xor b
   let y = (x or (0'u32 - x)) shr 31   # y=0 if x==0 else 1
-  0'u32 - (y xor 1'u32)
+  return 0'u32 - (y xor 1'u32)
 
 proc ctMask64From32(m32: uint32): uint64 {.inline.} =
-  (uint64(m32) shl 32) or uint64(m32)
+  return (uint64(m32) shl 32) or uint64(m32)
 
 proc ctMask64EqU32(a, b: uint32): uint64 {.inline.} =
-  ctMask64From32(ctMask32Eq(a, b))
+  return ctMask64From32(ctMask32Eq(a, b))
 
 proc ctMask64EqU64(a, b: uint64): uint64 {.inline.} =
   ## 0xFFFFFFFFFFFFFFFF when a == b else 0
   let x = a xor b
   let y = (x or (0'u64 - x)) shr 63
-  0'u64 - (y xor 1'u64)
+  return 0'u64 - (y xor 1'u64)
 
 proc ctBlend64(a, b, m: uint64): uint64 {.inline.} =
   ## return (a & ~m) | (b & m)
-  (a and (not m)) or (b and m)
+  return (a and (not m)) or (b and m)
 
 proc forceNonZero64(x: uint64): uint64 {.inline.} =
   ## Return x if nonzero else 1  (branchless)
   let nz = (x or (0'u64 - x)) shr 63    # 0 if x==0 else 1
   let isZero = nz xor 1'u64             # 1 if x==0 else 0
-  x or isZero
+  return x or isZero
 
 proc forceOddNotOne(x: uint64): uint64 {.inline.} =
   ## Make x odd and != 1, branchlessly: (x|1), then if ==1 add 2 -> 3
   var c = x or 1'u64
   let isOne = ctMask64EqU64(c, 1'u64)
   c = c + (isOne and 2'u64)
-  c
+  return c
 
 # ------- PRF via SHAKE256 (domain-separated) -------
 
@@ -233,7 +233,7 @@ proc invOdd64(c: uint64): uint64 =
   var x: uint64 = 1'u64
   for _ in 0..5:
     x = x * (2'u64 - c * x)
-  x
+  return x
 
 # ------- Constant-time engine -------
 
@@ -524,7 +524,7 @@ proc encryptBlock*(ks: KeySchedule, buf: openArray[byte]): array[PI_BLOCK_BYTES,
   for i in 0..3: st[i] = st[i] xor ks.wOut[i]
   var outb: array[PI_BLOCK_BYTES, byte]
   storeState(outb, st)
-  outb
+  return outb
 
 proc decryptBlock*(ks: KeySchedule, buf: openArray[byte]): array[PI_BLOCK_BYTES, byte] =
   doAssert buf.len == PI_BLOCK_BYTES
@@ -534,7 +534,7 @@ proc decryptBlock*(ks: KeySchedule, buf: openArray[byte]): array[PI_BLOCK_BYTES,
   for i in 0..3: st[i] = st[i] xor ks.wIn[i]
   var outb: array[PI_BLOCK_BYTES, byte]
   storeState(outb, st)
-  outb
+  return outb
 
 # ------- Optional hygiene: zeroization helper -------
 
