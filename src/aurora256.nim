@@ -1,7 +1,6 @@
 # ========================================
 # File: src/aurora256_ct.nim
 # AURORA-Π (Pi) — Constant-time engine variant
-# - Same external API types as src/aurora256.nim: expandKey, encryptBlock, decryptBlock
 # - Uses SHAKE256 as a KDF/PRF to derive whitening and program
 # - Executes all op candidates each step and selects via masks (no key-dependent branches)
 # ========================================
@@ -60,21 +59,42 @@ proc toHex64(x: uint64): string =
     t = t shr 4
   result = s
 
-# ------- Constant-time helpers -------
+# ------- Constant-time helpers (correct masks, branchless fixes) -------
 
 proc ctMask32Eq(a, b: uint32): uint32 {.inline.} =
-  ## 0xFFFFFFFF when a == b else 0x00000000
+  ## 0xFFFFFFFF when a == b else 0x00000000  (correct, no false positives)
   let x = a xor b
-  let m = (x - 1) shr 31
-  0'u32 - m
+  let y = (x or (0'u32 - x)) shr 31   # y=0 if x==0 else 1
+  0'u32 - (y xor 1'u32)
 
-proc ctMask64Eq(a, b: uint32): uint64 {.inline.} =
-  let m32 = ctMask32Eq(a, b)
+proc ctMask64From32(m32: uint32): uint64 {.inline.} =
   (uint64(m32) shl 32) or uint64(m32)
+
+proc ctMask64EqU32(a, b: uint32): uint64 {.inline.} =
+  ctMask64From32(ctMask32Eq(a, b))
+
+proc ctMask64EqU64(a, b: uint64): uint64 {.inline.} =
+  ## 0xFFFFFFFFFFFFFFFF when a == b else 0
+  let x = a xor b
+  let y = (x or (0'u64 - x)) shr 63
+  0'u64 - (y xor 1'u64)
 
 proc ctBlend64(a, b, m: uint64): uint64 {.inline.} =
   ## return (a & ~m) | (b & m)
   (a and (not m)) or (b and m)
+
+proc forceNonZero64(x: uint64): uint64 {.inline.} =
+  ## Return x if nonzero else 1  (branchless)
+  let nz = (x or (0'u64 - x)) shr 63    # 0 if x==0 else 1
+  let isZero = nz xor 1'u64             # 1 if x==0 else 0
+  x or isZero
+
+proc forceOddNotOne(x: uint64): uint64 {.inline.} =
+  ## Make x odd and != 1, branchlessly: (x|1), then if ==1 add 2 -> 3
+  var c = x or 1'u64
+  let isOne = ctMask64EqU64(c, 1'u64)
+  c = c + (isOne and 2'u64)
+  c
 
 # ------- PRF via SHAKE256 (domain-separated) -------
 
@@ -97,18 +117,25 @@ proc next64(pr: var PRFCtx): uint64 {.inline.} =
   var tmp = pr.ctx.read(8)
   load64(tmp, 0)
 
-proc sampleRange(pr: var PRFCtx, n: int): int {.inline.} =
-  ## Uniform sample in [0, n-1] using rejection to avoid modulo bias
-  let m = uint64(n)
-  let maxu = 0xFFFFFFFFFFFFFFFF'u64
-  let limit = (maxu div m) * m - 1'u64
-  var x: uint64
-  while true:
-    x = pr.next64()
-    if x <= limit:
-      return int(x mod m)
+# ------- Range sampling (rejection-free when uint128 exists) -------
 
-# ------- Byte permutation (constant-time) -------
+proc sampleRange(pr: var PRFCtx, n: int): int {.inline.} =
+  ## Uniform sample in [0, n-1]
+  let m = uint64(n)
+  let r = pr.next64()
+  when compiles( (uint128(1)) ):
+    let hi = (uint128(r) * uint128(m)) shr 64
+    int(hi.uint64)
+  else:
+    ## Fallback: classic rejection to avoid modulo bias
+    let maxu = 0xFFFFFFFFFFFFFFFF'u64
+    let limit = (maxu div m) * m - 1'u64
+    var x = r
+    while x > limit:
+      x = pr.next64()
+    int(x mod m)
+
+# ------- Byte permutation (constant-time application) -------
 
 proc genPerm32(pr: var PRFCtx): array[32, byte] =
   var p: array[32, byte]
@@ -137,7 +164,7 @@ proc eqMask8(a, b: uint8): uint8 {.inline.} =
 
 proc applyPerm(s: State256, p: array[32, byte]): State256 =
   ## Constant-time permutation application without secret-dependent indexing
-  var inb = s.asBytes
+  let inb = s.asBytes
   var outb: array[32, byte]
   for j in 0..31: outb[j] = 0'u8
   for k in 0..31:
@@ -214,17 +241,22 @@ proc runProgCT(x: var State256, prog: seq[Instr], decrypt = false) =
   let decMask = if decrypt: 0xFFFFFFFFFFFFFFFF'u64 else: 0'u64
   for ins in prog:
     # Build op masks (64-bit all-ones if match else zero)
-    let mXor   = ctMask64Eq(uint32(ins.op.ord), uint32(OP_XOR.ord))
-    let mAdd   = ctMask64Eq(uint32(ins.op.ord), uint32(OP_ADD.ord))
-    let mRotl  = ctMask64Eq(uint32(ins.op.ord), uint32(OP_ROTL.ord))
-    let mMul   = ctMask64Eq(uint32(ins.op.ord), uint32(OP_MUL.ord))
-    let mPerm  = ctMask64Eq(uint32(ins.op.ord), uint32(OP_PERM.ord))
-    let mCross = ctMask64Eq(uint32(ins.op.ord), uint32(OP_CROSS.ord))
+    let mXor   = ctMask64EqU32(uint32(ins.op.ord), uint32(OP_XOR.ord))
+    let mAdd   = ctMask64EqU32(uint32(ins.op.ord), uint32(OP_ADD.ord))
+    let mRotl  = ctMask64EqU32(uint32(ins.op.ord), uint32(OP_ROTL.ord))
+    let mMul   = ctMask64EqU32(uint32(ins.op.ord), uint32(OP_MUL.ord))
+    let mPerm  = ctMask64EqU32(uint32(ins.op.ord), uint32(OP_PERM.ord))
+    let mCross = ctMask64EqU32(uint32(ins.op.ord), uint32(OP_CROSS.ord))
 
-    # Lane masks for lane-local ops
+    # Lane masks for lane-local ops (branchless disable when lane<0)
     var lm: array[4, uint64]
-    for i in 0..3:
-      lm[i] = ctMask64Eq(uint32(i), uint32(int(ins.lane)))
+    block:
+      let lpSigned = int32(ins.lane) + 1'i32               # 0 if -1 else 1..4
+      let mLaneNonZero32 = not ctMask32Eq(uint32(lpSigned), 0'u32)
+      let mLaneNonZero64 = ctMask64From32(mLaneNonZero32)
+      for i in 0..3:
+        let mEq = ctMask64EqU32(uint32(i), uint32(int(ins.lane)))
+        lm[i] = mEq and mLaneNonZero64
 
     var candXor, candAdd, candRotl, candMul, candPerm, candCrossF, candCrossI: State256
     # start all candidates as identity (pass-through)
@@ -292,11 +324,11 @@ proc runProgCT(x: var State256, prog: seq[Instr], decrypt = false) =
     var newX: State256
     for i in 0..3:
       var acc: uint64 = 0
-      acc = acc or (candXor[i]  and mXor)
-      acc = acc or (candAdd[i]  and mAdd)
-      acc = acc or (candRotl[i] and mRotl)
-      acc = acc or (candMul[i]  and mMul)
-      acc = acc or (candPerm[i] and mPerm)
+      acc = acc or (candXor[i]   and mXor)
+      acc = acc or (candAdd[i]   and mAdd)
+      acc = acc or (candRotl[i]  and mRotl)
+      acc = acc or (candMul[i]   and mMul)
+      acc = acc or (candPerm[i]  and mPerm)
       acc = acc or (candCross[i] and mCross)
       newX[i] = acc
     x = newX
@@ -308,13 +340,12 @@ proc expandKey*(key: openArray[byte], tweak: openArray[byte] = @[]): KeySchedule
   doAssert tweak.len == 0 or tweak.len == PI_TWEAK_BYTES
 
   # Domain-separated PRFs
-  var prWin  = initPRF(key, tweak, "WIN_PI")
-  var prWout = initPRF(key, tweak, "WOUT_PI")
+  var prWin   = initPRF(key, tweak, "WIN_PI")
+  var prWout  = initPRF(key, tweak, "WOUT_PI")
   var prProgA = initPRF(key, tweak, "PROG_PI", "A")
   var prProgB = initPRF(key, tweak, "PROG_PI", "B")
 
   # Whitening in/out (256 bits each)
-  var buf: array[32, byte]
   for i in 0..3: result.wIn[i]  = prWin.next64()
   for i in 0..3: result.wOut[i] = prWout.next64()
 
@@ -327,6 +358,7 @@ proc expandKey*(key: openArray[byte], tweak: openArray[byte] = @[]): KeySchedule
   var crossFirst: bool  = false  # at least one CROSS in first 4 steps of window
   var crossSecond: bool = false  # at least one CROSS in last 4 steps of window
   var haveMul: bool     = false
+  var haveAddRot: bool  = false  # NEW: ensure ≥1 ADD or ROTL per window
   var laneHit: array[4, bool]
   # Super-window (16-step) per-lane MUL coverage
   var superRemaining: int = 16
@@ -352,6 +384,12 @@ proc expandKey*(key: openArray[byte], tweak: openArray[byte] = @[]): KeySchedule
         inc missingMulCount
         if firstMissingLane < 0: firstMissingLane = ln
 
+    # Track first missing lane in this window for potential forced lane-op
+    var firstWinMissingLane = -1
+    for ln in 0..3:
+      if not laneHit[ln] and firstWinMissingLane < 0:
+        firstWinMissingLane = ln
+
     # End of first half (before taking step 4 of window): ensure at least one CROSS in first half
     if forceKind < 0 and winRemaining == 5 and not crossFirst:
       forceKind = 6  # CROSS
@@ -359,7 +397,7 @@ proc expandKey*(key: openArray[byte], tweak: openArray[byte] = @[]): KeySchedule
     # If super-window is tight, force MUL early (avoid using the very last step of a window)
     if forceKind < 0 and missingMulCount > 0 and superRemaining <= (missingMulCount + 1) and winRemaining > 1:
       forceKind = 4
-      forcedLane = firstMissingLane
+      forcedLane = (if firstMissingLane >= 0: firstMissingLane else: 0)
 
     # On the last step of the 8-step window, satisfy window quotas and lane coverage
     if forceKind < 0 and winRemaining == 1:
@@ -371,10 +409,13 @@ proc expandKey*(key: openArray[byte], tweak: openArray[byte] = @[]): KeySchedule
       elif not haveCross:
         forceKind = 6   # CROSS
       elif totalPC < 3:
-        # Add an extra diffusion op to reach >=3 among {PERM,CROSS}
-        forceKind = 6   # choose CROSS deterministically
+        forceKind = 6   # add extra diffusion op
       elif not haveMul:
         forceKind = 4   # MUL (some nonlinearity each window)
+        forcedLane = (if firstMissingLane >= 0: firstMissingLane else: 0)
+      elif not haveAddRot:
+        forceKind = 2   # NEW: enforce at least one ADD/ROTL per window (pick ADD)
+        forcedLane = (if firstWinMissingLane >= 0: firstWinMissingLane else: 0)
       else:
         # Enforce per-window lane coverage for lane-local ops
         for ln in 0..3:
@@ -387,32 +428,34 @@ proc expandKey*(key: openArray[byte], tweak: openArray[byte] = @[]): KeySchedule
       if forceKind >= 0:
         forceKind
       else:
-        if firstHalf: int(prProgA.next64() mod 8'u64) else: int(prProgB.next64() mod 8'u64)
+        if firstHalf: int(prProgA.next64() and 7'u64) else: int(prProgB.next64() and 7'u64)
+
     case pick
     of 0,1: # XOR
       let ln =
         if forcedLane >= 0: forcedLane
         else: (if firstHalf: int(prProgA.next64() and 3'u64) else: int(prProgB.next64() and 3'u64))
       var c = if firstHalf: prProgA.next64() else: prProgB.next64()
-      while c == 0'u64:
-        c = if firstHalf: prProgA.next64() else: prProgB.next64()  # reject true no-op
+      c = forceNonZero64(c)                           # avoid true no-op (branchless)
       prog.add Instr(op: OP_XOR, lane: int8(ln), imm: c)
       laneHit[ln] = true
-    of 2:   # ADD (odd)
-      let ln = if firstHalf: int(prProgA.next64() and 3'u64) else: int(prProgB.next64() and 3'u64)
-      let c = (if firstHalf: prProgA.next64() else: prProgB.next64()) or 1'u64
+    of 2:   # ADD (any non-zero)
+      let ln = if forcedLane >= 0: forcedLane else: (if firstHalf: int(prProgA.next64() and 3'u64) else: int(prProgB.next64() and 3'u64))
+      var c = if firstHalf: prProgA.next64() else: prProgB.next64()
+      c = forceNonZero64(c)                           # avoid identity
       prog.add Instr(op: OP_ADD, lane: int8(ln), imm: c)
+      haveAddRot = true
       laneHit[ln] = true
     of 3:   # ROTL
-      let ln = if firstHalf: int(prProgA.next64() and 3'u64) else: int(prProgB.next64() and 3'u64)
+      let ln = if forcedLane >= 0: forcedLane else: (if firstHalf: int(prProgA.next64() and 3'u64) else: int(prProgB.next64() and 3'u64))
       let r = 1 + int((if firstHalf: prProgA.next64() else: prProgB.next64()) mod 63'u64)
       prog.add Instr(op: OP_ROTL, lane: int8(ln), rot: uint8(r))
+      haveAddRot = true
       laneHit[ln] = true
     of 4:   # MUL (odd, not 1)
       let ln = if forcedLane >= 0: forcedLane else: (if firstHalf: int(prProgA.next64() and 3'u64) else: int(prProgB.next64() and 3'u64))
-      var c = (if firstHalf: prProgA.next64() else: prProgB.next64()) or 1'u64
-      while c == 1'u64:
-        c = (if firstHalf: prProgA.next64() else: prProgB.next64()) or 1'u64  # reject identity multiplier
+      var c = if firstHalf: prProgA.next64() else: prProgB.next64()
+      c = forceOddNotOne(c)                           # odd and != 1 (branchless)
       prog.add Instr(op: OP_MUL, lane: int8(ln), imm: c)
       haveMul = true
       laneHit[ln] = true
@@ -439,6 +482,7 @@ proc expandKey*(key: openArray[byte], tweak: openArray[byte] = @[]): KeySchedule
       crossFirst = false
       crossSecond = false
       haveMul = false
+      haveAddRot = false
       for i in 0..3: laneHit[i] = false
 
     dec superRemaining
@@ -491,3 +535,26 @@ proc decryptBlock*(ks: KeySchedule, buf: openArray[byte]): array[PI_BLOCK_BYTES,
   var outb: array[PI_BLOCK_BYTES, byte]
   storeState(outb, st)
   outb
+
+# ------- Optional hygiene: zeroization helper -------
+
+proc wipeKeySchedule*(ks: var KeySchedule) =
+  for i in 0..3:
+    ks.wIn[i]  = 0
+    ks.wOut[i] = 0
+  for i in 0 ..< ks.enc.len:
+    ks.enc[i].imm = 0
+    ks.enc[i].rot = 0
+    ks.enc[i].r2  = 0
+    ks.enc[i].r3  = 0
+    ks.enc[i].r4  = 0
+    for j in 0..31: ks.enc[i].perm[j] = 0
+  for i in 0 ..< ks.dec.len:
+    ks.dec[i].imm = 0
+    ks.dec[i].rot = 0
+    ks.dec[i].r2  = 0
+    ks.dec[i].r3  = 0
+    ks.dec[i].r4  = 0
+    for j in 0..31: ks.dec[i].perm[j] = 0
+  ks.enc.setLen(0)
+  ks.dec.setLen(0)
