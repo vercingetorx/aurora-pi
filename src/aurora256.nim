@@ -6,6 +6,7 @@
 # ========================================
 when isMainModule: discard
 
+import std/strformat
 import ./common
 import ../private/sha3/shake256
 
@@ -106,6 +107,7 @@ proc initPRF(key: openArray[byte], tweak: openArray[byte], dom: string, subTag: 
   var c = newShake256Ctx()
   c.update("AURORA-PI-CT")
   c.update(dom)
+  c.update("\x00")
   if subTag.len > 0: c.update(subTag)
   c.update("\x00")
   if key.len > 0: c.update(key)
@@ -339,11 +341,11 @@ proc expandKey*(key: openArray[byte], tweak: openArray[byte] = @[]): KeySchedule
   doAssert key.len == PI_KEY_BYTES
   doAssert tweak.len == 0 or tweak.len == PI_TWEAK_BYTES
 
-  # Program is KEY-ONLY; whitening depends on (KEY,TWEAK)
-  var prWin   = initPRF(key, tweak, "WIN_PI")
-  var prWout  = initPRF(key, tweak, "WOUT_PI")
-  var prProgA = initPRF(key, @[],  "PROG_PI", "A")   # pinned to key
-  var prProgB = initPRF(key, @[],  "PROG_PI", "B")   # pinned to key
+  # Domain-separated PRFs
+  var prWin   = initPRF(key, tweak, fmt"WIN_PI:{piProfile}")
+  var prWout  = initPRF(key, tweak, fmt"WOUT_PI:{piProfile}")
+  var prProgA = initPRF(key, tweak, fmt"PROG_PI:{piProfile}", "A")
+  var prProgB = initPRF(key, tweak, fmt"PROG_PI:{piProfile}", "B")
 
   # Whitening in/out (256 bits each)
   for i in 0..3: result.wIn[i]  = prWin.next64()
@@ -358,7 +360,7 @@ proc expandKey*(key: openArray[byte], tweak: openArray[byte] = @[]): KeySchedule
   var crossFirst: bool  = false  # at least one CROSS in first 4 steps of window
   var crossSecond: bool = false  # at least one CROSS in last 4 steps of window
   var haveMul: bool     = false
-  var haveAddRot: bool  = false  # ensure ≥1 of {ADD, ROTL} per window
+  var haveAddRot: bool  = false  # NEW: ensure ≥1 ADD or ROTL per window
   var laneHit: array[4, bool]
   # Super-window (16-step) per-lane MUL coverage
   var superRemaining: int = 16
@@ -369,12 +371,14 @@ proc expandKey*(key: openArray[byte], tweak: openArray[byte] = @[]): KeySchedule
     var forceKind = -1
     var forcedLane = -1
 
-    # Window diffusion quotas (per 8 steps)
+    # Window diffusion quotas (per 8 steps):
+    # - at least one PERM and one CROSS
+    # - at least 3 total among {PERM,CROSS}
     let havePerm = permCount > 0
     let haveCross = crossCount > 0
     let totalPC = permCount + crossCount
 
-    # Super-window per-lane MUL coverage (per 16 steps)
+    # Super-window per-lane MUL coverage (per 16 steps): ensure each lane gets a MUL at least once
     var missingMulCount = 0
     var firstMissingLane = -1
     for ln in 0..3:
@@ -388,36 +392,37 @@ proc expandKey*(key: openArray[byte], tweak: openArray[byte] = @[]): KeySchedule
       if not laneHit[ln] and firstWinMissingLane < 0:
         firstWinMissingLane = ln
 
-    # End of first half: ensure at least one CROSS in first half
+    # End of first half (before taking step 4 of window): ensure at least one CROSS in first half
     if forceKind < 0 and winRemaining == 5 and not crossFirst:
       forceKind = 6  # CROSS
 
-    # If super-window is tight, force MUL early (avoid using the last step of a window)
+    # If super-window is tight, force MUL early (avoid using the very last step of a window)
     if forceKind < 0 and missingMulCount > 0 and superRemaining <= (missingMulCount + 1) and winRemaining > 1:
       forceKind = 4
       forcedLane = (if firstMissingLane >= 0: firstMissingLane else: 0)
 
-    # On the last step of the window, satisfy quotas and coverage
+    # On the last step of the 8-step window, satisfy window quotas and lane coverage
     if forceKind < 0 and winRemaining == 1:
+      # Ensure at least one CROSS in second half of the window
       if not crossSecond:
-        forceKind = 6               # CROSS in second half
+        forceKind = 6
       elif not havePerm:
-        forceKind = 5               # ensure ≥1 PERM
+        forceKind = 5   # PERM
       elif not haveCross:
-        forceKind = 6               # ensure ≥1 CROSS
+        forceKind = 6   # CROSS
       elif totalPC < 3:
-        forceKind = 6               # ≥3 among {PERM,CROSS}
+        forceKind = 6   # add extra diffusion op
       elif not haveMul:
-        forceKind = 4               # ≥1 MUL per window
+        forceKind = 4   # MUL (some nonlinearity each window)
         forcedLane = (if firstMissingLane >= 0: firstMissingLane else: 0)
       elif not haveAddRot:
-        forceKind = 2               # NEW: ≥1 of {ADD, ROTL}
+        forceKind = 2   # NEW: enforce at least one ADD/ROTL per window (pick ADD)
         forcedLane = (if firstWinMissingLane >= 0: firstWinMissingLane else: 0)
       else:
-        # Per-window lane coverage for lane-local ops
+        # Enforce per-window lane coverage for lane-local ops
         for ln in 0..3:
           if not laneHit[ln]:
-            forceKind = 0           # pick a lane-op (XOR)
+            forceKind = 0   # choose a lane-op (XOR)
             forcedLane = ln
             break
 
@@ -428,45 +433,40 @@ proc expandKey*(key: openArray[byte], tweak: openArray[byte] = @[]): KeySchedule
         if firstHalf: int(prProgA.next64() and 7'u64) else: int(prProgB.next64() and 7'u64)
 
     case pick
-    of 0,1: # XOR (lane-local)
+    of 0,1: # XOR
       let ln =
         if forcedLane >= 0: forcedLane
         else: (if firstHalf: int(prProgA.next64() and 3'u64) else: int(prProgB.next64() and 3'u64))
       var c = if firstHalf: prProgA.next64() else: prProgB.next64()
-      c = forceNonZero64(c)                           # avoid XOR 0
+      c = forceNonZero64(c)                           # avoid true no-op (branchless)
       prog.add Instr(op: OP_XOR, lane: int8(ln), imm: c)
       laneHit[ln] = true
-
-    of 2:   # ADD (non-zero)
+    of 2:   # ADD (any non-zero)
       let ln = if forcedLane >= 0: forcedLane else: (if firstHalf: int(prProgA.next64() and 3'u64) else: int(prProgB.next64() and 3'u64))
       var c = if firstHalf: prProgA.next64() else: prProgB.next64()
-      c = forceNonZero64(c)
+      c = forceNonZero64(c)                           # avoid identity
       prog.add Instr(op: OP_ADD, lane: int8(ln), imm: c)
       haveAddRot = true
       laneHit[ln] = true
-
     of 3:   # ROTL
       let ln = if forcedLane >= 0: forcedLane else: (if firstHalf: int(prProgA.next64() and 3'u64) else: int(prProgB.next64() and 3'u64))
       let r = 1 + int((if firstHalf: prProgA.next64() else: prProgB.next64()) mod 63'u64)
       prog.add Instr(op: OP_ROTL, lane: int8(ln), rot: uint8(r))
       haveAddRot = true
       laneHit[ln] = true
-
-    of 4:   # MUL (odd, !=1)
+    of 4:   # MUL (odd, not 1)
       let ln = if forcedLane >= 0: forcedLane else: (if firstHalf: int(prProgA.next64() and 3'u64) else: int(prProgB.next64() and 3'u64))
       var c = if firstHalf: prProgA.next64() else: prProgB.next64()
-      c = forceOddNotOne(c)
+      c = forceOddNotOne(c)                           # odd and != 1 (branchless)
       prog.add Instr(op: OP_MUL, lane: int8(ln), imm: c)
       haveMul = true
       laneHit[ln] = true
       mulLaneSeen[ln] = true
-
-    of 5:   # PERM (full-state)
+    of 5:   # PERM
       let permVal = if firstHalf: genPerm32(prProgA) else: genPerm32(prProgB)
       prog.add Instr(op: OP_PERM, lane: -1'i8, perm: permVal)
       inc permCount
-
-    else:   # CROSS (full-state)
+    else:   # CROSS
       let r1 = 1 + int((if firstHalf: prProgA.next64() else: prProgB.next64()) mod 63'u64)
       let r2 = 1 + int((if firstHalf: prProgA.next64() else: prProgB.next64()) mod 63'u64)
       let r3 = 1 + int((if firstHalf: prProgA.next64() else: prProgB.next64()) mod 63'u64)
