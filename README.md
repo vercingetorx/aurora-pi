@@ -8,10 +8,10 @@
 
 * **Type:** tweakable, table-free, constant-time block cipher
 * **Block:** 256 bits (4×64) · **Key:** 256 bits · **Tweak:** 128 bits (optional)
-* **Design idea:** each **key** instantiates a reversible “micro-program” built from a tiny invertible ISA. No fixed S-box/MDS/rotation schedule; the per-instance topology is KDF-programmed **from the key**. The **tweak** affects whitening (not the program topology).
+* **Design idea:** each `(key, tweak)` instantiates a reversible “micro-program” built from a tiny invertible ISA. No fixed S-box/MDS/rotation schedule; the per-instance topology is KDF-programmed.
 * **ISA:** `XOR lane,c` · `ADD lane,c` (**c ≠ 0**) · `MUL lane,c` (**c odd, c ≠ 1 mod 2^64**) · `ROTL lane,r (1..63)` · `PERM π` (32-byte Fisher–Yates) · `CROSS r1..r4` (cross-lane ARX mixer).
 * **Steps (default):** 64 micro-ops (configurable by profile).
-* **Derivation:** SHAKE256 XOF with domain separation derives **whitening from (key,tweak)** and the **micro-program from key only** (two streams: `PROG|A` then `PROG|B` mid-synthesis).
+* **Derivation:** SHAKE256 XOF with domain separation derives whitening and the micro-program (two streams: `PROG|A` then `PROG|B` mid-synthesis).
 * **Sampling:** range reduction is **rejection-free** via 128-bit multiply-high when available; fallback uses **unbiased rejection**. Fisher–Yates remains unbiased.
 * **Constant-time engine:** branchless, mask-select executor. Every step evaluates all op candidates and selects via bit-masks; byte permutation uses a constant-time scatter-gather; no secret-dependent branches or indexing. Corrected equality masks; identity constants avoided via **branchless mapping** (no “retry” loops).
 
@@ -43,10 +43,8 @@ Library provides `expandKey`, `encryptBlock`, `decryptBlock`, stream/XEX modes, 
 Given `(K, T)`:
 
 1. **Derivation via SHAKE256 (XOF)**
-   Construct domain-separated contexts:
-
-   * `WIN_PI`, `WOUT_PI` **depend on (key, tweak)** and produce 256-bit `wIn` and `wOut`.
-   * `PROG_PI|A`, `PROG_PI|B` **depend on key only** and drive micro-program synthesis.
+   Construct domain-separated contexts: `WIN_PI`, `WOUT_PI`, and `PROG_PI|A`, `PROG_PI|B`.
+   Draw `wIn` and `wOut` (256 bits each) from `WIN/WOUT`.
 
 2. **Program synthesis (64 steps)**
    For each step, sample an instruction from `PROG` (`A` for first half, then `B`).
@@ -55,7 +53,7 @@ Given `(K, T)`:
    * ≥1 `PERM` and ≥1 `CROSS`
    * ≥3 total among {`PERM`,`CROSS`}
    * ≥1 `MUL`
-   * ≥1 of {`ADD`, `ROTL`}
+   * **NEW:** ≥1 of {`ADD`, `ROTL`}
    * `CROSS` occurs at least once in each half (steps 1–4 and 5–8).
      **Super-window (16 steps):** each lane gets a `MUL` at least once.
      **Sampling:** range reduction uses rejection-free 128-bit multiply-high when available; otherwise unbiased rejection. Fisher–Yates is unbiased.
@@ -64,7 +62,7 @@ Given `(K, T)`:
    Build `dec` as the exact inverse in reverse order:
    `XOR` self-inverse; `ADD` ↔ `SUB`; `MUL` ↔ `MUL(invOdd64(c))`; `ROTL r` ↔ `ROTR r`; `PERM π` ↔ `π⁻¹`; `CROSS` uses its fixed inverse sequence.
 
-*Effect:* topology and constants vary **per key**; the **tweak** influences whitening (not topology), with enforced diffusion/nonlinearity guarantees.
+*Effect:* topology and constants vary per `(key, tweak)` via domain-separated XOF, with enforced diffusion/nonlinearity guarantees.
 
 ---
 
@@ -95,10 +93,10 @@ pt = store(S)
 ## 6) Security goals & claims
 
 * **Wide-block horizon:** 256-bit block ⇒ ~2¹²⁸ birthday/data bound.
-* **True tweakability:** tweak changes **whitening** (not program topology).
+* **True tweakability:** tweak changes **program topology** and whitening.
 * **Trail hostility:** frequent `PERM` (byte diffusion), `CROSS` (lane coupling), `MUL` (multiplicative nonlinearity) in every window; 64 steps provide margin.
 * **Structural unpredictability:** no fixed S-box/MDS; per-instance circuits frustrate global trails and templating.
-* **KDF robustness:** SHAKE256 XOF with explicit domain separation derives whitening and program as specified above.
+* **KDF robustness:** SHAKE256 XOF with explicit domain separation derives whitening and program.
 * **Constant-time:** branchless mask-select engine; constant-time permutation; **corrected equality masks**; identity constants avoided via **branchless mapping**. (Key setup uses rejection-free range reduction when `uint128` is available; fallback is unbiased rejection.)
 * **PQ:** 256-bit key (~2¹²⁸ with Grover); 256-bit block avoids small-data quantum distinguishers.
 
@@ -167,7 +165,9 @@ Each file includes:
 * **π-XEX-AE:** `XEXAE_AD, XEXAE_CT, XEXAE_TAG (32 bytes)`
 * **π-SIV:** `SIV_AD, SIV_IV (16 bytes), SIV_CT`
 
-**Verify locally**
+Determinism & profiles: vectors are deterministic per profile; changing `-d:piProfile` changes the synthesized program and outputs. Build with `--path:src`.
+
+Verify locally:
 
 ```
 nim c --path:src -d:release -d:piProfile=max kats/kat_gen.nim
