@@ -116,7 +116,9 @@ proc initPRF(key: openArray[byte], tweak: openArray[byte], dom: string, subTag: 
   result.ctx = c
 
 proc next64(pr: var PRFCtx): uint64 {.inline.} =
-  var tmp = pr.ctx.read(8)
+  ## Read 8 bytes from XOF
+  var tmp: array[8, byte]
+  pr.ctx.read(tmp)
   load64(tmp, 0)
 
 # ------- Range sampling (rejection-free when uint128 exists) -------
